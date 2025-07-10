@@ -364,6 +364,19 @@ export async function resetQuizAttempt(userTrainingId: string) {
     }
 }
 
+export async function removeUserFromTraining(userTrainingId: string) {
+  if (!userTrainingId) {
+    return { success: false, message: 'ID da atribuição de treinamento não fornecido.' };
+  }
+  try {
+    await deleteDoc(doc(db, 'user_trainings', userTrainingId));
+    return { success: true, message: 'Usuário removido do treinamento com sucesso!' };
+  } catch (error) {
+    console.error('Error removing user from training: ', error);
+    return { success: false, message: 'Erro ao remover usuário do treinamento.' };
+  }
+}
+
 
 export async function updateTrainingStatus(data: { userTrainingId: string; completed: boolean }) {
   try {

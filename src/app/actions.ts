@@ -36,7 +36,7 @@ export async function loginUser(data: z.infer<typeof loginSchema>): Promise<{ su
   try {
     const usersRef = collection(db, "users");
     const q = query(usersRef, 
-      where("email", "==", email), 
+      where("email", "==", email.toLowerCase()), 
       where("password", "==", password), // Unsafe, but following existing pattern
       where("role", "==", role)
     );

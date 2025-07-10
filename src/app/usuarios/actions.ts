@@ -33,6 +33,8 @@ export async function createUser(data: UserFormData) {
     const { id, ...userDataToSave } = validation.data;
     const finalUserData: any = { ...userDataToSave, createdAt: new Date() };
     
+    finalUserData.email = finalUserData.email.toLowerCase();
+
     if (finalUserData.departmentId === '') {
       delete finalUserData.departmentId;
     }
@@ -60,6 +62,8 @@ export async function updateUser(data: UserFormData) {
 
     const userRef = doc(db, 'users', id);
     const updateData: any = userDataToUpdate;
+
+    updateData.email = updateData.email.toLowerCase();
     
     // Only update password if a new one is provided
     if (password && password.length >= 6) {

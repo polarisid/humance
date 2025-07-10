@@ -3,12 +3,12 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { getTrainingById, getMyTrainings, updateTrainingStatus, getAssignedUsersForTraining, resetQuizAttempt, submitQuizResult, type Training, type UserTraining, type AssignedUser } from '../actions';
+import { getTrainingById, getMyTrainings, updateTrainingStatus, getAssignedUsersForTraining, resetQuizAttempt, submitQuizResult, removeUserFromTraining, type Training, type UserTraining, type AssignedUser } from '../actions';
 import type { LoggedUser } from '@/app/actions';
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Loader2, CheckCircle, XCircle, RefreshCw, FileText } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, RefreshCw, FileText, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -16,6 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 
 function getYoutubeEmbedUrl(url: string | undefined): string | null {
@@ -75,6 +76,16 @@ function AssignedUsersTable({ trainingId }: { trainingId: string }) {
             toast({ title: 'Erro', description: result.message, variant: 'destructive' });
         }
     };
+
+    const handleRemoveUser = async (userTrainingId: string) => {
+        const result = await removeUserFromTraining(userTrainingId);
+        if (result.success) {
+            toast({ title: 'Sucesso!', description: result.message });
+            fetchUsers();
+        } else {
+            toast({ title: 'Erro', description: result.message, variant: 'destructive' });
+        }
+    };
     
     return (
         <Card>
@@ -104,12 +115,31 @@ function AssignedUsersTable({ trainingId }: { trainingId: string }) {
                                     </TableCell>
                                     <TableCell className="text-center">{user.quizScore !== null && user.quizScore !== undefined ? `${user.quizScore}%` : '-'}</TableCell>
                                     <TableCell className="text-right">
-                                        {user.quizStatus === 'failed' && (
-                                            <Button size="sm" variant="outline" onClick={() => handleReset(user.userTrainingId)}>
-                                                <RefreshCw className="mr-2 h-4 w-4" />
-                                                Resetar
-                                            </Button>
-                                        )}
+                                        <div className='flex items-center justify-end gap-1'>
+                                            {user.quizStatus === 'failed' && (
+                                                <Button size="sm" variant="outline" onClick={() => handleReset(user.userTrainingId)}>
+                                                    <RefreshCw className="mr-2 h-4 w-4" />
+                                                    Resetar
+                                                </Button>
+                                            )}
+                                            <AlertDialog>
+                                                <AlertDialogTrigger asChild>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive"><Trash2 className="h-4 w-4" /></Button>
+                                                </AlertDialogTrigger>
+                                                <AlertDialogContent>
+                                                    <AlertDialogHeader>
+                                                        <AlertDialogTitle>Confirmar Remoção</AlertDialogTitle>
+                                                        <AlertDialogDescription>
+                                                            Tem certeza que deseja remover {user.name} deste treinamento? O progresso dele será perdido.
+                                                        </AlertDialogDescription>
+                                                    </AlertDialogHeader>
+                                                    <AlertDialogFooter>
+                                                        <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                                        <AlertDialogAction onClick={() => handleRemoveUser(user.userTrainingId)}>Remover</AlertDialogAction>
+                                                    </AlertDialogFooter>
+                                                </AlertDialogContent>
+                                            </AlertDialog>
+                                        </div>
                                     </TableCell>
                                 </TableRow>
                             ))

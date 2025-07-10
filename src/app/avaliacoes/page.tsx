@@ -8,6 +8,11 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useToast } from '@/hooks/use-toast';
 import { MoreHorizontal, Loader2, Plus, Trash2, Edit, Send } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 
 import { 
   getReviews, 
@@ -275,7 +280,7 @@ export default function ReviewsPage() {
 
   const handleOpenAssignDialog = (template: ReviewTemplate) => {
     setSelectedTemplateForAssign(template);
-    setSelectedManagerIds([]);
+    setSelectedManagerIds(template.assignedManagers?.map(m => m.id) || []);
     setAssignDialogOpen(true);
   };
   
@@ -290,6 +295,7 @@ export default function ReviewsPage() {
     if (result.success) {
       toast({ title: 'Sucesso!', description: result.message });
       setAssignDialogOpen(false);
+      if(user) fetchPageData(user);
     } else {
       toast({ title: 'Erro', description: result.message, variant: 'destructive' });
     }
@@ -363,15 +369,31 @@ export default function ReviewsPage() {
                     </CardHeader>
                     <CardContent>
                         <Table>
-                            <TableHeader><TableRow><TableHead>Nome do Modelo</TableHead><TableHead>Itens</TableHead><TableHead className="text-right">Ações</TableHead></TableRow></TableHeader>
+                            <TableHeader><TableRow><TableHead>Nome do Modelo</TableHead><TableHead>Itens</TableHead><TableHead>Atribuído a</TableHead><TableHead className="text-right">Ações</TableHead></TableRow></TableHeader>
                             <TableBody>
                                 {loading ? (
-                                    <TableRow><TableCell colSpan={3} className="h-24 text-center"><Loader2 className="mx-auto h-8 w-8 animate-spin" /></TableCell></TableRow>
+                                    <TableRow><TableCell colSpan={4} className="h-24 text-center"><Loader2 className="mx-auto h-8 w-8 animate-spin" /></TableCell></TableRow>
                                 ) : templates.length > 0 ? (
                                     templates.map(template => (
                                         <TableRow key={template.id}>
                                             <TableCell className="font-medium">{template.name}</TableCell>
                                             <TableCell>{template.items.length}</TableCell>
+                                            <TableCell>
+                                                {template.assignedManagers && template.assignedManagers.length > 0 ? (
+                                                    <Popover>
+                                                        <PopoverTrigger asChild>
+                                                            <Button variant="link" className="p-0 h-auto">{`${template.assignedManagers.length} líder(es)`}</Button>
+                                                        </PopoverTrigger>
+                                                        <PopoverContent className="w-auto p-2">
+                                                            <ul className="space-y-1">
+                                                                {template.assignedManagers.map(m => <li key={m.id} className="text-sm">{m.name}</li>)}
+                                                            </ul>
+                                                        </PopoverContent>
+                                                    </Popover>
+                                                ) : (
+                                                    <span className="text-muted-foreground text-xs">Nenhum</span>
+                                                )}
+                                            </TableCell>
                                             <TableCell className="text-right">
                                                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenAssignDialog(template)}><Send className="h-4 w-4" /></Button>
                                                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenFormDialog(template)}><Edit className="h-4 w-4" /></Button>
@@ -381,7 +403,7 @@ export default function ReviewsPage() {
                                         </TableRow>
                                     ))
                                 ) : (
-                                    <TableRow><TableCell colSpan={3} className="h-24 text-center">Nenhum modelo criado.</TableCell></TableRow>
+                                    <TableRow><TableCell colSpan={4} className="h-24 text-center">Nenhum modelo criado.</TableCell></TableRow>
                                 )}
                             </TableBody>
                         </Table>
@@ -445,7 +467,11 @@ export default function ReviewsPage() {
               {managers.map(m => (
                 <div key={m.id} className="flex items-center justify-between">
                   <Label htmlFor={`manager-${m.id}`} className="font-normal">{m.name}</Label>
-                  <Checkbox id={`manager-${m.id}`} onCheckedChange={(checked) => handleManagerSelection(m.id, !!checked)} />
+                  <Checkbox 
+                    id={`manager-${m.id}`} 
+                    checked={selectedManagerIds.includes(m.id)}
+                    onCheckedChange={(checked) => handleManagerSelection(m.id, !!checked)} 
+                   />
                 </div>
               ))}
             </div></ScrollArea>
@@ -506,3 +532,5 @@ export default function ReviewsPage() {
     </div>
   );
 }
+
+    

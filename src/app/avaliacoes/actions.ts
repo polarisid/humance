@@ -23,6 +23,7 @@ import type { LoggedUser } from '../actions';
 import { reviewTemplateSchema, reviewSubmissionSchema, reviewAdjustmentSchema, type ReviewTemplateFormData } from './schema';
 import type { User } from '../usuarios/actions';
 import { format } from 'date-fns';
+import { getManagers } from '../setores/actions';
 
 export type ReviewStatus = 'Pendente' | 'Em Aprovação' | 'Ajuste Solicitado' | 'Concluída' | 'Atrasada';
 
@@ -117,17 +118,39 @@ export interface ReviewTemplate {
   name: string;
   items: EvaluationItem[];
   createdAt: string;
+  assignedManagers?: { id: string; name: string; }[];
 }
 
 export async function getReviewTemplates(): Promise<ReviewTemplate[]> {
   try {
-    const templatesSnapshot = await getDocs(query(collection(db, 'review_templates')));
+    const [templatesSnapshot, assignmentsSnapshot, managers] = await Promise.all([
+      getDocs(query(collection(db, 'review_templates'))),
+      getDocs(query(collection(db, 'review_assignments'))),
+      getManagers()
+    ]);
+    
+    const managersMap = new Map(managers.map(m => [m.id, m.name]));
+    
+    const assignmentsByTemplate = new Map<string, { id: string; name: string; }[]>();
+    assignmentsSnapshot.forEach(doc => {
+        const data = doc.data();
+        const managerId = data.managerId;
+        const managerName = managersMap.get(managerId);
+
+        if (managerName) {
+            const managerInfo = { id: managerId, name: managerName };
+            const existing = assignmentsByTemplate.get(data.templateId) || [];
+            assignmentsByTemplate.set(data.templateId, [...existing, managerInfo]);
+        }
+    });
+
     return templatesSnapshot.docs.map(doc => {
       const data = doc.data();
       return {
         id: doc.id,
         ...data,
         createdAt: (data.createdAt as Timestamp)?.toDate().toISOString(),
+        assignedManagers: assignmentsByTemplate.get(doc.id) || [],
       } as ReviewTemplate;
     });
   } catch (error) {
@@ -588,5 +611,7 @@ export async function deleteWeeklyObservation(data: { reviewId: string; observat
     return { success: false, message: 'Erro ao excluir observação.' };
   }
 }
+
+    
 
     
