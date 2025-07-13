@@ -269,13 +269,16 @@ export default function ReviewDetailPage() {
                     <Card>
                         <CardHeader>
                             <CardTitle>{review.templateName}</CardTitle>
-                            <CardDescription>Avalie cada item de 1 a 10, sendo 1 "Muito a melhorar" e 10 "Excelente".</CardDescription>
+                            <CardDescription>Avalie cada item de 0 a 10, sendo 0 "Muito a melhorar" e 10 "Excelente".</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6">
                             {review.templateItems.map((item, index) => (
                                 <div key={index} className="space-y-3">
                                     <div className="flex justify-between items-center">
-                                        <Label htmlFor={`item-${index}`} className="text-base">{item.text}</Label>
+                                        <div>
+                                            <Label htmlFor={`item-${index}`} className="text-base">{item.text}</Label>
+                                            {item.description && <p className="text-sm text-muted-foreground mt-1">{item.description}</p>}
+                                        </div>
                                         <div className="flex items-center gap-2 text-right">
                                             {isCollaborator && reviewIsCompleted && review.previousScores && review.previousScores[String(index)] !== undefined && (
                                                 (() => {
@@ -296,7 +299,7 @@ export default function ReviewDetailPage() {
                                     </div>
                                     <Slider
                                         id={`item-${index}`}
-                                        min={1}
+                                        min={0}
                                         max={10}
                                         step={1}
                                         value={[scores[index]]}
@@ -418,65 +421,69 @@ export default function ReviewDetailPage() {
                         <ReviewRadarChart items={review.templateItems} scores={scores} />
                     )}
 
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Pontos Observados</CardTitle>
-                            <CardDescription>Adicione pontos de acompanhamento. Eles não são visíveis para o colaborador.</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                            {isManager && !reviewIsCompleted && (
-                                <div className="flex items-start gap-2 mb-4">
-                                    <Textarea 
-                                        placeholder="Descreva um fato ou ponto de atenção..."
-                                        rows={2}
-                                        value={newObservation}
-                                        onChange={(e) => setNewObservation(e.target.value)}
-                                        disabled={isAddingObservation}
-                                    />
-                                    <Button onClick={handleAddObservation} disabled={isAddingObservation || !newObservation.trim()} size="icon" className="shrink-0">
-                                        {isAddingObservation ? <Loader2 className="h-4 w-4 animate-spin"/> : <Plus className="h-4 w-4"/>}
-                                        <span className="sr-only">Adicionar</span>
-                                    </Button>
-                                </div>
-                            )}
-                            <ScrollArea className="h-48">
-                                <div className="space-y-4 pr-4">
-                                    {review.weeklyObservations && review.weeklyObservations.length > 0 ? (
-                                        review.weeklyObservations.map(obs => (
-                                            <div key={obs.id} className="flex items-start justify-between gap-4 text-sm">
-                                                <div className="flex-1">
-                                                    <p className="text-muted-foreground whitespace-pre-wrap">{obs.text}</p>
-                                                    <p className="text-xs text-muted-foreground/70 mt-1">{format(new Date(obs.createdAt), 'dd/MM/yyyy')}</p>
-                                                </div>
-                                                {isManager && !reviewIsCompleted && (
-                                                    <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => handleDeleteObservation(obs.id)}>
-                                                        <Trash2 className="h-4 w-4 text-destructive"/>
-                                                    </Button>
-                                                )}
-                                            </div>
-                                        ))
-                                    ) : (
-                                        <p className="text-sm text-muted-foreground text-center py-4">Nenhum ponto observado ainda.</p>
+                    {!isCollaborator && (
+                        <>
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle>Pontos Observados</CardTitle>
+                                    <CardDescription>Adicione pontos de acompanhamento. Eles não são visíveis para o colaborador.</CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                    {isManager && !reviewIsCompleted && (
+                                        <div className="flex items-start gap-2 mb-4">
+                                            <Textarea 
+                                                placeholder="Descreva um fato ou ponto de atenção..."
+                                                rows={2}
+                                                value={newObservation}
+                                                onChange={(e) => setNewObservation(e.target.value)}
+                                                disabled={isAddingObservation}
+                                            />
+                                            <Button onClick={handleAddObservation} disabled={isAddingObservation || !newObservation.trim()} size="icon" className="shrink-0">
+                                                {isAddingObservation ? <Loader2 className="h-4 w-4 animate-spin"/> : <Plus className="h-4 w-4"/>}
+                                                <span className="sr-only">Adicionar</span>
+                                            </Button>
+                                        </div>
                                     )}
-                                </div>
-                            </ScrollArea>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader>
-                            <CardTitle>Observações do Gestor</CardTitle>
-                            <CardDescription>Suas anotações privadas. Não serão compartilhadas com o colaborador.</CardDescription>
-                        </CardHeader>
-                        <CardContent>
-                             <Textarea
-                                placeholder="Adicione anotações, exemplos específicos e pontos de atenção para a conversa de feedback..."
-                                rows={8}
-                                value={managerObservations}
-                                onChange={(e) => setManagerObservations(e.target.value)}
-                                disabled={!isFormEditable}
-                            />
-                        </CardContent>
-                    </Card>
+                                    <ScrollArea className="h-48">
+                                        <div className="space-y-4 pr-4">
+                                            {review.weeklyObservations && review.weeklyObservations.length > 0 ? (
+                                                review.weeklyObservations.map(obs => (
+                                                    <div key={obs.id} className="flex items-start justify-between gap-4 text-sm">
+                                                        <div className="flex-1">
+                                                            <p className="text-muted-foreground whitespace-pre-wrap">{obs.text}</p>
+                                                            <p className="text-xs text-muted-foreground/70 mt-1">{format(new Date(obs.createdAt), 'dd/MM/yyyy')}</p>
+                                                        </div>
+                                                        {isManager && !reviewIsCompleted && (
+                                                            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => handleDeleteObservation(obs.id)}>
+                                                                <Trash2 className="h-4 w-4 text-destructive"/>
+                                                            </Button>
+                                                        )}
+                                                    </div>
+                                                ))
+                                            ) : (
+                                                <p className="text-sm text-muted-foreground text-center py-4">Nenhum ponto observado ainda.</p>
+                                            )}
+                                        </div>
+                                    </ScrollArea>
+                                </CardContent>
+                            </Card>
+                            <Card>
+                                <CardHeader>
+                                    <CardTitle>Observações do Gestor</CardTitle>
+                                    <CardDescription>Suas anotações privadas. Não serão compartilhadas com o colaborador.</CardDescription>
+                                </CardHeader>
+                                <CardContent>
+                                    <Textarea
+                                        placeholder="Adicione anotações, exemplos específicos e pontos de atenção para a conversa de feedback..."
+                                        rows={8}
+                                        value={managerObservations}
+                                        onChange={(e) => setManagerObservations(e.target.value)}
+                                        disabled={!isFormEditable}
+                                    />
+                                </CardContent>
+                            </Card>
+                        </>
+                    )}
                     
                     <Alert>
                         <AlertCircle className="h-4 w-4" />

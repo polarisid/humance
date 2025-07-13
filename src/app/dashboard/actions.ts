@@ -2,13 +2,14 @@
 'use server';
 
 import { db } from '@/lib/firebase';
-import { collection, doc, getDoc, getDocs, query, setDoc, where, addDoc, deleteDoc, orderBy, type Timestamp } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, setDoc, where, addDoc, deleteDoc, orderBy, type Timestamp, limit } from 'firebase/firestore';
 import { z } from 'zod';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import type { LoggedUser } from '@/app/actions';
 import { getUsers, type User } from '../usuarios/actions';
 import { getDepartments } from '../setores/actions';
+import type { ReviewStatus } from '../avaliacoes/actions';
 
 export interface EmployeeOfTheMonthData {
   name: string;
@@ -25,7 +26,50 @@ const employeeSchema = z.object({
 });
 
 
-export async function getEmployeeOfTheMonth(): Promise<EmployeeOfTheMonthData | null> {
+export async function getEmployeeOfTheMonth(user: LoggedUser): Promise<EmployeeOfTheMonthData | null> {
+  const period = format(new Date(), 'yyyy-MM');
+
+  if (user.role === 'Gerente') {
+    const allUsers = await getUsers();
+    const allDepartments = await getDepartments();
+    const myDepartmentIds = allDepartments.filter(d => d.leaderId === user.id).map(d => d.id);
+    const myTeamIds = allUsers.filter(u => u.departmentId && myDepartmentIds.includes(u.departmentId)).map(u => u.id);
+
+    if (myTeamIds.length === 0) return null;
+
+    const reviewsQuery = query(
+      collection(db, 'reviews'),
+      where('employeeId', 'in', myTeamIds),
+      where('period', '==', period),
+      where('status', '==', 'Concluída')
+    );
+    const reviewsSnapshot = await getDocs(reviewsQuery);
+    
+    if (reviewsSnapshot.empty) {
+        return null;
+    }
+
+    const completedReviews = reviewsSnapshot.docs.map(doc => doc.data());
+    
+    if (completedReviews.length === 0) {
+        return null; // No completed reviews for the team this month
+    }
+
+    // Sort in application code to avoid complex index
+    completedReviews.sort((a, b) => (b.averageScore || 0) - (a.averageScore || 0));
+
+    const topReview = completedReviews[0];
+    const topEmployee = allUsers.find(u => u.id === topReview.employeeId);
+    
+    return {
+      name: topEmployee?.name || 'Não encontrado',
+      role: topEmployee?.role || 'Não encontrado',
+      reason: `Destaque do mês na equipe com nota ${topReview.averageScore.toFixed(1)}.`,
+      imageUrl: '',
+    };
+  }
+  
+  // Admin and Collaborator view
   try {
     const docRef = doc(db, 'config', 'employeeOfTheMonth');
     const docSnap = await getDoc(docRef);
@@ -33,12 +77,11 @@ export async function getEmployeeOfTheMonth(): Promise<EmployeeOfTheMonthData | 
     if (docSnap.exists()) {
       return docSnap.data() as EmployeeOfTheMonthData;
     } else {
-      // Return a default value if it doesn't exist
       return {
-        name: 'João Almeida',
-        role: 'Analista de Marketing',
-        reason: 'Reconhecimento pelo excelente desempenho em Maio.',
-        imageUrl: 'https://placehold.co/100x100.png',
+        name: 'Funcionário do Mês',
+        role: 'Definir no painel',
+        reason: 'Aguardando definição do RH.',
+        imageUrl: '',
       };
     }
   } catch (error) {
@@ -270,75 +313,67 @@ export async function getTrainingProgressSummary(user: LoggedUser): Promise<Trai
   }
 }
 
-// --- User Training Progress (Admin) ---
-export interface UserTrainingProgress {
-  userId: string;
-  userName: string;
-  userRole: string;
-  completedCount: number;
-  totalCount: number;
-  completionRate: number;
+
+// --- Performance Review Summary (Dashboard) ---
+export interface PerformanceReviewSummaryData {
+    employeeId: string;
+    employeeName: string;
+    employeeRole: string;
+    status: ReviewStatus;
+    averageScore?: number;
+    reviewId?: string;
 }
 
-export async function getTrainingProgressPerUser(user: LoggedUser): Promise<UserTrainingProgress[]> {
-  if (user.role === 'Colaborador') {
-      return [];
-  }
-  
-  try {
-    const allUsers = await getUsers();
-    let targetUsers: User[] = [];
+export async function getPerformanceReviewSummary(user: LoggedUser): Promise<PerformanceReviewSummaryData[]> {
+    if (user.role === 'Colaborador') return [];
 
-    if (user.role === 'Administrador') {
-        targetUsers = allUsers;
-    } else if (user.role === 'Gerente') {
-        const allDepartments = await getDepartments();
-        const myDepartmentIds = allDepartments.filter(d => d.leaderId === user.id).map(d => d.id);
-        if (myDepartmentIds.length > 0) {
-            targetUsers = allUsers.filter(u => u.departmentId && myDepartmentIds.includes(u.departmentId));
+    try {
+        const [allUsers, allDepartments] = await Promise.all([getUsers(), getDepartments()]);
+        let targetUsers: User[] = [];
+
+        if (user.role === 'Administrador') {
+            targetUsers = allUsers;
+        } else if (user.role === 'Gerente') {
+            const myDepartmentIds = allDepartments.filter(d => d.leaderId === user.id).map(d => d.id);
+            if (myDepartmentIds.length > 0) {
+                targetUsers = allUsers.filter(u => u.departmentId && myDepartmentIds.includes(u.departmentId));
+            }
         }
+
+        if (targetUsers.length === 0) return [];
+
+        const period = format(new Date(), 'yyyy-MM');
+        const reviewsRef = collection(db, 'reviews');
+        const targetUserIds = targetUsers.map(u => u.id);
+
+        if(targetUserIds.length === 0) return [];
+
+        const reviewsQuery = query(
+            reviewsRef,
+            where('employeeId', 'in', targetUserIds),
+            where('period', '==', period)
+        );
+        const reviewsSnapshot = await getDocs(reviewsQuery);
+        const reviewsMap = new Map(reviewsSnapshot.docs.map(doc => [doc.data().employeeId, {id: doc.id, ...doc.data()}]));
+
+        const summary: PerformanceReviewSummaryData[] = targetUsers.map(u => {
+            const review = reviewsMap.get(u.id);
+            return {
+                employeeId: u.id,
+                employeeName: u.name,
+                employeeRole: u.role,
+                status: review?.status || 'Pendente',
+                averageScore: review?.averageScore,
+                reviewId: review?.id,
+            };
+        });
+        
+        return summary.sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+
+    } catch (error) {
+        console.error("Error fetching performance review summary:", error);
+        return [];
     }
-    
-    if (targetUsers.length === 0) {
-      return [];
-    }
-    
-    const targetUserIds = targetUsers.map(u => u.id);
-
-    const userTrainingsSnapshot = await getDocs(query(collection(db, 'user_trainings'), where('userId', 'in', targetUserIds)));
-    
-    const progressMap = new Map<string, { completedCount: number; totalCount: number }>();
-
-    targetUsers.forEach(u => {
-      progressMap.set(u.id, { completedCount: 0, totalCount: 0 });
-    });
-
-    userTrainingsSnapshot.forEach(doc => {
-      const { userId, completed } = doc.data();
-      if (progressMap.has(userId)) {
-        const userProgress = progressMap.get(userId)!;
-        userProgress.totalCount += 1;
-        if (completed) {
-          userProgress.completedCount += 1;
-        }
-      }
-    });
-
-    const result: UserTrainingProgress[] = targetUsers.map(u => {
-      const progress = progressMap.get(u.id)!;
-      const completionRate = progress.totalCount > 0 ? Math.round((progress.completedCount / progress.totalCount) * 100) : 0;
-      return {
-        userId: u.id,
-        userName: u.name,
-        userRole: u.role,
-        ...progress,
-        completionRate,
-      };
-    }).sort((a, b) => a.userName.localeCompare(b.userName));
-
-    return result;
-  } catch (error) {
-    console.error("Error fetching training progress per user:", error);
-    return [];
-  }
 }
+
+    

@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -22,32 +23,38 @@ const defaultEmployee: EmployeeOfTheMonthData = {
 
 export function EmployeeOfTheMonth() {
   const { toast } = useToast();
-  const [employee, setEmployee] = useState<EmployeeOfTheMonthData>(defaultEmployee);
+  const [employee, setEmployee] = useState<EmployeeOfTheMonthData | null>(defaultEmployee);
   const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [user, setUser] = useState<LoggedUser | null>(null);
   
-  // Dialog state
+  // Dialog state for admin edit
   const [dialogOpen, setDialogOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [formData, setFormData] = useState<EmployeeOfTheMonthData>(defaultEmployee);
   
+  const fetchData = async (loggedUser: LoggedUser) => {
+      setLoading(true);
+      const data = await getEmployeeOfTheMonth(loggedUser);
+      if (data) {
+        setEmployee(data);
+        if (loggedUser.role === 'Administrador') {
+            setFormData(data);
+        }
+      } else {
+        setEmployee(null);
+      }
+      setLoading(false);
+    };
+
   useEffect(() => {
     const userString = localStorage.getItem('user');
     if (userString) {
       const loggedUser: LoggedUser = JSON.parse(userString);
-      setIsAdmin(loggedUser.role === 'Administrador');
+      setUser(loggedUser);
+      fetchData(loggedUser);
+    } else {
+        setLoading(false);
     }
-
-    async function fetchData() {
-      setLoading(true);
-      const data = await getEmployeeOfTheMonth();
-      if (data) {
-        setEmployee(data);
-        setFormData(data);
-      }
-      setLoading(false);
-    }
-    fetchData();
   }, []);
   
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -85,6 +92,13 @@ export function EmployeeOfTheMonth() {
       .join('');
   };
 
+  const getCardTitle = () => {
+      if (user?.role === 'Gerente') {
+          return "Destaque da Equipe";
+      }
+      return "Funcionário do Mês";
+  }
+
   if (loading) {
     return (
       <Card className="relative overflow-hidden">
@@ -103,13 +117,29 @@ export function EmployeeOfTheMonth() {
     );
   }
 
+  if (!employee) {
+    if (user?.role === 'Gerente') {
+        return (
+            <Card className="relative overflow-hidden bg-primary text-primary-foreground flex flex-col items-center justify-center text-center h-full min-h-[220px]">
+                <CardHeader>
+                    <CardTitle className="font-headline text-lg">Destaque da Equipe</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <p className="text-sm text-primary-foreground/80">Nenhum destaque para o mês atual, pois não há avaliações concluídas na equipe.</p>
+                </CardContent>
+            </Card>
+        )
+    }
+    return null; // Don't render for other roles if no employee is set.
+  }
+
   return (
-    <Card className="relative overflow-hidden bg-primary text-primary-foreground">
+    <Card className="relative overflow-hidden bg-primary text-primary-foreground min-h-[220px]">
       <div className="absolute -right-8 -top-8 h-24 w-24 text-white/10">
         <Award className="h-full w-full" />
       </div>
 
-      {isAdmin && (
+      {user?.role === 'Administrador' && (
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button variant="ghost" size="icon" className="absolute right-2 top-2 h-7 w-7 text-primary-foreground/70 hover:bg-primary-foreground/20 hover:text-primary-foreground">
@@ -154,7 +184,7 @@ export function EmployeeOfTheMonth() {
       )}
 
       <CardHeader>
-        <CardTitle className="font-headline text-lg">Funcionário do Mês</CardTitle>
+        <CardTitle className="font-headline text-lg">{getCardTitle()}</CardTitle>
         <CardDescription className="text-primary-foreground/80">{employee.reason}</CardDescription>
       </CardHeader>
       <CardContent className="flex items-center gap-4">

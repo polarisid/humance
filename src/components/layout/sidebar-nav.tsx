@@ -16,6 +16,7 @@ import {
   Users,
   ShoppingCart,
   Briefcase,
+  BookText,
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -26,6 +27,7 @@ const navItemsDefinition = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['Administrador', 'Gerente', 'Colaborador'] },
   { href: '/avaliacoes', label: 'Avaliações', icon: ClipboardCheck, roles: ['Administrador', 'Gerente', 'Colaborador'] },
   { href: '/treinamentos', label: 'Treinamentos', icon: GraduationCap, roles: ['Administrador', 'Gerente', 'Colaborador'] },
+  { href: '/diario', label: 'Diário', icon: BookText, roles: ['Administrador', 'Gerente'] },
   { href: '/usuarios', label: 'Usuários', icon: Users, roles: ['Administrador'] },
   { href: '/compras', label: 'Lista de Compras', icon: ShoppingCart, roles: ['Administrador', 'Gerente'] },
   { href: '/setores', label: 'Setores', icon: Briefcase, roles: ['Administrador'] },

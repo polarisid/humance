@@ -29,7 +29,7 @@ export function WeeklyObservations() {
       const loggedUser: LoggedUser = JSON.parse(userString);
       setUser(loggedUser);
 
-      if (loggedUser.role === 'Gerente' || loggedUser.role === 'Administrador') {
+      if (loggedUser.role === 'Administrador') {
         fetchUsers(loggedUser);
       } else {
         setLoading(false);
@@ -70,7 +70,7 @@ export function WeeklyObservations() {
         toast({ title: "Sucesso!", description: "Observação adicionada." });
         setObservationText('');
         setSelectedUserId('');
-        fetchUsers(user);
+        // No need to refetch here as it's a quick-add form
       } else {
         toast({ title: "Erro", description: result.message, variant: "destructive" });
       }
@@ -82,8 +82,8 @@ export function WeeklyObservations() {
     }
   };
 
-  if (!user || (user.role !== 'Gerente' && user.role !== 'Administrador')) {
-    return null; // Don't render for collaborators
+  if (user?.role !== 'Administrador') {
+    return null; // Don't render for anyone but admins
   }
 
   if (loading) {
@@ -101,26 +101,14 @@ export function WeeklyObservations() {
   }
 
   if (observableUsers.length === 0) {
-      return (
-        <Card>
-            <CardHeader>
-                <CardTitle>Adicionar Pontos da Semana</CardTitle>
-                 <CardDescription>Registre observações para as avaliações deste mês.</CardDescription>
-            </CardHeader>
-            <CardContent>
-                <p className="text-sm text-muted-foreground text-center py-4">
-                    Nenhum colaborador encontrado sob sua gestão.
-                </p>
-            </CardContent>
-        </Card>
-      );
+      return null; // Don't show if there are no users to observe
   }
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Adicionar Pontos da Semana</CardTitle>
-        <CardDescription>Registre observações que auxiliarão na avaliação de desempenho. Se não houver uma avaliação iniciada para o colaborador neste mês, uma será criada automaticamente.</CardDescription>
+        <CardTitle>Adicionar Observação Rápida</CardTitle>
+        <CardDescription>Registre observações para as avaliações deste mês. Se não houver uma avaliação iniciada para o colaborador, uma será criada.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">

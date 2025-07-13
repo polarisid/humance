@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -27,7 +28,7 @@ export function Birthdays() {
   }, []);
 
   return (
-    <Card className="flex flex-col h-full">
+    <Card className="flex flex-col h-full min-h-[220px]">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="font-headline text-lg">Aniversariantes do Mês</CardTitle>
         <Cake className="h-5 w-5 text-primary" />

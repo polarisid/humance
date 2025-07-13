@@ -18,12 +18,14 @@ import {
   getDoc,
   orderBy,
   limit,
+  setDoc,
 } from 'firebase/firestore';
 import type { LoggedUser } from '../actions';
-import { reviewTemplateSchema, reviewSubmissionSchema, reviewAdjustmentSchema, type ReviewTemplateFormData } from './schema';
+import { reviewTemplateSchema, reviewSubmissionSchema, reviewAdjustmentSchema, bonusParametersSchema, kpiModelSchema, kpiBonusParametersSchema, type ReviewTemplateFormData, type BonusParametersData, type KpiModelFormData, type KpiBonusParametersData } from './schema';
 import type { User } from '../usuarios/actions';
 import { format } from 'date-fns';
-import { getManagers } from '../setores/actions';
+import { getManagers, getDepartments } from '../setores/actions';
+import { getUsers } from '../usuarios/actions';
 
 export type ReviewStatus = 'Pendente' | 'Em Aprovação' | 'Ajuste Solicitado' | 'Concluída' | 'Atrasada';
 
@@ -38,6 +40,7 @@ export interface Review {
   managerId?: string;
   period?: string;
   averageScore?: number;
+  kpiScore?: number;
 }
 
 export interface WeeklyObservation {
@@ -60,6 +63,7 @@ export interface PerformanceReview {
   status: ReviewStatus;
   scores?: Record<string, number>;
   averageScore?: number;
+  kpiScore?: number;
   managerObservations?: string;
   feedbackForEmployee?: string;
   adminFeedbackForManager?: string;
@@ -70,23 +74,38 @@ export interface PerformanceReview {
 }
 
 
-export async function getReviews(user: LoggedUser): Promise<Review[]> {
+export async function getReviews(user: LoggedUser, filters?: { departmentId?: string; period?: string }): Promise<Review[]> {
   const reviewsRef = collection(db, 'reviews');
-  let q: Query;
+  let conditions = [];
 
   switch (user.role) {
     case 'Colaborador':
-      q = query(reviewsRef, where('employeeId', '==', user.id));
+      conditions.push(where('employeeId', '==', user.id));
       break;
     case 'Gerente':
-       q = query(reviewsRef, where('managerId', '==', user.id));
+      conditions.push(where('managerId', '==', user.id));
       break;
     case 'Administrador':
-      q = query(reviewsRef);
+      // No initial role-based condition for Admin
       break;
     default:
       return [];
   }
+  
+  if (user.role === 'Administrador' && filters?.departmentId) {
+    const departmentDoc = await getDoc(doc(db, 'departments', filters.departmentId));
+    if (departmentDoc.exists()) {
+        const departmentName = departmentDoc.data().name;
+        conditions.push(where('department', '==', departmentName));
+    }
+  }
+
+  if (filters?.period) {
+    conditions.push(where('period', '==', filters.period));
+  }
+
+
+  const q = conditions.length > 0 ? query(reviewsRef, ...conditions) : query(reviewsRef);
   const snapshot = await getDocs(q);
 
   return snapshot.docs.map(doc => {
@@ -103,14 +122,99 @@ export async function getReviews(user: LoggedUser): Promise<Review[]> {
       managerId: data.managerId,
       period: data.period,
       averageScore: data.averageScore,
+      kpiScore: data.kpiScore,
     };
   });
 }
 
-// --- New Template Management ---
+// --- New Leaderboard Action ---
+
+export interface LeaderboardData {
+    leaderId: string;
+    leaderName: string;
+    averageScore: number;
+    kpiScore: number;
+    kpiBonus: number;
+    totalReviews: number;
+    teamSize: number;
+}
+
+export async function getLeaderboard(period: string): Promise<LeaderboardData[]> {
+    if (!period) return [];
+
+    try {
+        const [managers, allUsers, departments, kpiBonusParams] = await Promise.all([
+            getManagers(),
+            getUsers(),
+            getDepartments(),
+            getKpiBonusParameters()
+        ]);
+        
+        const leaderboardData: LeaderboardData[] = [];
+
+        for (const manager of managers) {
+            const myDepartmentIds = departments.filter(d => d.leaderId === manager.id).map(d => d.id);
+            const myTeam = allUsers.filter(u => u.departmentId && myDepartmentIds.includes(u.departmentId));
+            const myTeamIds = myTeam.map(u => u.id);
+
+            if (myTeamIds.length === 0) continue;
+
+            const reviewsQuery = query(
+                collection(db, 'reviews'),
+                where('employeeId', 'in', myTeamIds),
+                where('period', '==', period),
+                where('status', '==', 'Concluída')
+            );
+            const reviewsSnapshot = await getDocs(reviewsQuery);
+
+            if (reviewsSnapshot.empty) continue;
+
+            let totalScore = 0;
+            const reviews = reviewsSnapshot.docs.map(doc => doc.data());
+
+            reviews.forEach(review => {
+                if (review.averageScore) {
+                    totalScore += review.averageScore;
+                }
+            });
+            
+            const firstReviewWithKpi = reviews.find(r => r.kpiScore !== undefined && r.kpiScore !== null);
+            const kpiScore = firstReviewWithKpi ? firstReviewWithKpi.kpiScore : 0;
+            
+            let kpiBonus = 0;
+            const applicableKpiRule = kpiBonusParams.rules.find(rule => kpiScore >= rule.minScore && kpiScore <= rule.maxScore);
+            if (applicableKpiRule) {
+                kpiBonus = applicableKpiRule.bonusValueLeader;
+            }
+
+
+            const averageScore = reviews.length > 0 ? totalScore / reviews.length : 0;
+            
+            leaderboardData.push({
+                leaderId: manager.id,
+                leaderName: manager.name,
+                averageScore: averageScore,
+                kpiScore: kpiScore,
+                kpiBonus: kpiBonus,
+                totalReviews: reviews.length,
+                teamSize: myTeam.length
+            });
+        }
+        
+        return leaderboardData.sort((a, b) => b.averageScore - a.averageScore);
+
+    } catch (error) {
+        console.error("Error getting leaderboard data: ", error);
+        return [];
+    }
+}
+
+
+// --- Template Management ---
 
 export interface EvaluationItem {
   text: string;
+  description?: string;
 }
 
 export interface ReviewTemplate {
@@ -315,7 +419,7 @@ export async function createReviews(data: {
     }
 }
 
-// --- New Review Detail Actions ---
+// --- Review Detail Actions ---
 
 export async function getReviewDetails(reviewId: string): Promise<PerformanceReview | null> {
     if (!reviewId) return null;
@@ -397,6 +501,7 @@ export async function getReviewDetails(reviewId: string): Promise<PerformanceRev
             status: reviewData.status,
             scores: reviewData.scores,
             averageScore: reviewData.averageScore,
+            kpiScore: reviewData.kpiScore,
             managerObservations: reviewData.managerObservations,
             feedbackForEmployee: reviewData.feedbackForEmployee,
             adminFeedbackForManager: reviewData.adminFeedbackForManager,
@@ -522,19 +627,24 @@ export async function addObservationForUser(data: { managerId: string; employeeI
       where('period', '==', period)
     );
     const querySnapshot = await getDocs(q);
+    
+    const employeeSnap = await getDoc(doc(db, 'users', employeeId));
+    if (!employeeSnap.exists()) {
+        return { success: false, message: 'Colaborador não encontrado.' };
+    }
+    const employeeData = employeeSnap.data();
+    
+    const managerSnap = await getDoc(doc(db, 'users', managerId));
+     if (!managerSnap.exists()) {
+        return { success: false, message: 'Gestor não encontrado.' };
+    }
+    const managerData = managerSnap.data();
 
     let reviewId: string;
 
     if (!querySnapshot.empty) {
       reviewId = querySnapshot.docs[0].id;
     } else {
-      const employeeSnap = await getDoc(doc(db, 'users', employeeId));
-
-      if (!employeeSnap.exists()) {
-          return { success: false, message: 'Colaborador não encontrado.' };
-      }
-      const employeeData = employeeSnap.data();
-
       let departmentName = 'N/A';
       if (employeeData.departmentId) {
         const deptSnap = await getDoc(doc(db, 'departments', employeeData.departmentId));
@@ -565,10 +675,15 @@ export async function addObservationForUser(data: { managerId: string; employeeI
       reviewId = newReviewRef.id;
     }
 
-    const obsRef = collection(db, 'reviews', reviewId, 'weekly_observations');
+    const obsRef = collection(db, 'weekly_observations_diary');
     await addDoc(obsRef, {
       text,
       createdAt: new Date(),
+      reviewId,
+      employeeId,
+      employeeName: employeeData.name,
+      authorId: managerId,
+      authorName: managerData.name,
     });
 
     return { success: true, message: 'Observação adicionada com sucesso.' };
@@ -612,6 +727,457 @@ export async function deleteWeeklyObservation(data: { reviewId: string; observat
   }
 }
 
+
+// --- Bonus Parameters Actions ---
+const defaultBonusParameters = {
+    rules: [
+        { minScore: 0, maxScore: 3.99, bonusPercentage: 0 },
+        { minScore: 4, maxScore: 6.99, bonusPercentage: 50 },
+        { minScore: 7, maxScore: 10, bonusPercentage: 100 }
+    ]
+};
+
+
+export async function getBonusParameters(): Promise<BonusParametersData> {
+  try {
+    const docRef = doc(db, 'config', 'bonusParameters');
+    const docSnap = await getDoc(docRef);
+
+    if (docSnap.exists()) {
+      return docSnap.data() as BonusParametersData;
+    } else {
+      // If it doesn't exist, create it with default values and return them
+      await setDoc(docRef, defaultBonusParameters);
+      return defaultBonusParameters;
+    }
+  } catch (error) {
+    console.error("Error fetching bonus parameters: ", error);
+    return defaultBonusParameters; // Return default on error
+  }
+}
+
+export async function updateBonusParameters(data: BonusParametersData) {
+    const validation = bonusParametersSchema.safeParse(data);
+    if (!validation.success) {
+        return { success: false, message: "Dados inválidos." };
+    }
+    try {
+        const docRef = doc(db, 'config', 'bonusParameters');
+        await setDoc(docRef, validation.data);
+        return { success: true, message: 'Parâmetros de bonificação atualizados com sucesso!' };
+    } catch (error) {
+        console.error("Error updating bonus parameters: ", error);
+        return { success: false, message: 'Erro ao atualizar parâmetros.' };
+    }
+}
+
+// --- KPI Bonus Parameters Actions ---
+const defaultKpiBonusParameters = {
+    rules: [
+        { minScore: 0, maxScore: 4.99, bonusValueLeader: 0, bonusValueLed: 0 },
+        { minScore: 5, maxScore: 7.99, bonusValueLeader: 250, bonusValueLed: 150 },
+        { minScore: 8, maxScore: 10, bonusValueLeader: 500, bonusValueLed: 300 }
+    ]
+};
+
+export async function getKpiBonusParameters(): Promise<KpiBonusParametersData> {
+  try {
+    const docRef = doc(db, 'config', 'kpiBonusParameters');
+    const docSnap = await getDoc(docRef);
+
+    if (docSnap.exists()) {
+      return docSnap.data() as KpiBonusParametersData;
+    } else {
+      await setDoc(docRef, defaultKpiBonusParameters);
+      return defaultKpiBonusParameters;
+    }
+  } catch (error) {
+    console.error("Error fetching KPI bonus parameters: ", error);
+    return defaultKpiBonusParameters;
+  }
+}
+
+export async function updateKpiBonusParameters(data: KpiBonusParametersData) {
+    const validation = kpiBonusParametersSchema.safeParse(data);
+    if (!validation.success) {
+        return { success: false, message: "Dados inválidos." };
+    }
+    try {
+        const docRef = doc(db, 'config', 'kpiBonusParameters');
+        await setDoc(docRef, validation.data);
+        return { success: true, message: 'Parâmetros de bonificação de KPI atualizados!' };
+    } catch (error) {
+        console.error("Error updating KPI bonus parameters: ", error);
+        return { success: false, message: 'Erro ao atualizar parâmetros de KPI.' };
+    }
+}
+
+
+// --- KPI Model Actions ---
+export interface KpiIndicator {
+    indicator: string;
+    weight: number;
+    goal: number;
+    type: 'accelerator' | 'detractor' | 'neutral';
+    condition: 'above' | 'below';
+}
+
+export interface KpiModel {
+    id: string;
+    departmentId: string;
+    departmentName?: string;
+    indicators: KpiIndicator[];
+}
+
+export async function getKpiModels(): Promise<KpiModel[]> {
+    try {
+        const [modelsSnapshot, departments] = await Promise.all([
+            getDocs(collection(db, 'kpi_models')),
+            getDepartments(),
+        ]);
+        const departmentsMap = new Map(departments.map(d => [d.id, d.name]));
+
+        return modelsSnapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+                id: doc.id,
+                departmentId: data.departmentId,
+                departmentName: departmentsMap.get(data.departmentId) || 'Setor não encontrado',
+                indicators: data.indicators || [],
+            } as KpiModel;
+        });
+    } catch (error) {
+        console.error("Error fetching KPI models: ", error);
+        return [];
+    }
+}
+
+
+export async function createOrUpdateKpiModel(data: KpiModelFormData) {
+    const validation = kpiModelSchema.safeParse(data);
+    if (!validation.success) {
+        return { success: false, message: 'Dados inválidos.', errors: validation.error.flatten().fieldErrors };
+    }
+
+    const { id, ...kpiData } = validation.data;
+
+    try {
+        if (id) {
+            const modelRef = doc(db, 'kpi_models', id);
+            await updateDoc(modelRef, kpiData as any);
+            return { success: true, message: 'Modelo de KPI atualizado com sucesso!' };
+        } else {
+            await addDoc(collection(db, 'kpi_models'), kpiData);
+            return { success: true, message: 'Modelo de KPI criado com sucesso!' };
+        }
+    } catch (error) {
+        console.error("Error saving KPI model: ", error);
+        return { success: false, message: 'Erro ao salvar modelo de KPI.' };
+    }
+}
+
+
+// --- KPI Assessment Actions ---
+
+export interface KpiAssessmentRecord {
+    id: string;
+    departmentId: string;
+    departmentName: string;
+    period: string;
+    kpiScore: number;
+    assessedAt: string;
+    results: Record<string, number>;
+    indicators: KpiIndicator[];
+}
+
+export async function getKpiAssessments(filters: { period: string; departmentId?: string }): Promise<KpiAssessmentRecord[]> {
+  try {
+    let conditions: any[] = [where('period', '==', filters.period)];
+    if (filters.departmentId && filters.departmentId !== 'all' && filters.departmentId !== '') {
+      conditions.push(where('departmentId', '==', filters.departmentId));
+    }
+    
+    const q = query(
+      collection(db, 'kpi_assessments'),
+      ...conditions
+    );
+    
+    const snapshot = await getDocs(q);
+    
+    const data = snapshot.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        departmentId: data.departmentId,
+        departmentName: data.departmentName,
+        period: data.period,
+        kpiScore: data.kpiScore,
+        assessedAt: (data.assessedAt as Timestamp).toDate().toISOString(),
+        results: data.results || {},
+        indicators: data.indicators || [],
+      } as KpiAssessmentRecord;
+    });
+
+    // Sort in code to avoid composite index requirement
+    return data.sort((a, b) => new Date(b.assessedAt).getTime() - new Date(a.assessedAt).getTime());
+    
+  } catch (error) {
+    console.error("Error fetching KPI assessments history: ", error);
+    return [];
+  }
+}
+
+export async function deleteKpiAssessment(assessmentId: string) {
+  if (!assessmentId) {
+    return { success: false, message: 'ID da apuração não fornecido.' };
+  }
+  
+  const batch = writeBatch(db);
+  const assessmentRef = doc(db, 'kpi_assessments', assessmentId);
+
+  try {
+    const assessmentSnap = await getDoc(assessmentRef);
+    if (!assessmentSnap.exists()) {
+        return { success: false, message: 'Apuração não encontrada.' };
+    }
+    
+    const { departmentName, period } = assessmentSnap.data();
+
+    // 1. Find all reviews for that department and period
+    if (departmentName && period) {
+        const reviewsQuery = query(
+            collection(db, 'reviews'),
+            where('department', '==', departmentName),
+            where('period', '==', period)
+        );
+        const reviewsSnapshot = await getDocs(reviewsQuery);
+
+        // 2. Update them to remove the kpiScore
+        reviewsSnapshot.forEach(reviewDoc => {
+            const reviewRef = doc(db, 'reviews', reviewDoc.id);
+            batch.update(reviewRef, { kpiScore: null }); // or FieldValue.delete()
+        });
+    }
+    
+    // 3. Delete the assessment itself
+    batch.delete(assessmentRef);
+    
+    // 4. Commit all changes
+    await batch.commit();
+
+    return { success: true, message: 'Apuração de KPI e notas correspondentes foram excluídas com sucesso!' };
+  } catch (error) {
+    console.error("Error deleting KPI assessment and updating reviews: ", error);
+    return { success: false, message: 'Erro ao excluir apuração de KPI.' };
+  }
+}
+
+function calculateKpiScore(model: KpiModel, results: Record<string, number>): number {
+    let totalPoints = 0;
+
+    model.indicators.forEach((indicator, index) => {
+        const resultValue = results[index];
+        if (resultValue === undefined || resultValue === null) return;
+
+        const goal = indicator.goal;
+        const points = indicator.weight;
+
+        let conditionMet = false;
+        if (indicator.condition === 'above') {
+            conditionMet = resultValue >= goal;
+        } else { // 'below'
+            conditionMet = resultValue <= goal;
+        }
+
+        if (indicator.type === 'accelerator' || indicator.type === 'neutral') {
+            if (conditionMet) {
+                totalPoints += points;
+            }
+        } else if (indicator.type === 'detractor') {
+             // Penalize if condition is NOT met
+            if (!conditionMet) {
+                totalPoints -= points;
+            }
+        }
+    });
+    
+    return totalPoints;
+}
+
+export async function processKpiResultsForDepartment(data: {
+    model: KpiModel;
+    results: Record<string, number>;
+    period: string;
+}) {
+    const { model, results, period } = data;
+    if (!model || !results || !period || !model.departmentName) {
+        return { success: false, message: "Dados inválidos para apuração." };
+    }
+    
+    try {
+        const kpiScore = calculateKpiScore(model, results);
+        
+        const reviewsQuery = query(
+            collection(db, 'reviews'),
+            where('department', '==', model.departmentName),
+            where('period', '==', period)
+        );
+        const reviewsSnapshot = await getDocs(reviewsQuery);
+        
+        if (reviewsSnapshot.empty) {
+            return { success: true, message: `Nenhuma avaliação encontrada para o período ${period} neste setor. A nota de KPI (${kpiScore.toFixed(2)}) foi calculada mas não foi salva.` };
+        }
+
+        const batch = writeBatch(db);
+        reviewsSnapshot.forEach(reviewDoc => {
+            const reviewRef = doc(db, 'reviews', reviewDoc.id);
+            const reviewData = reviewDoc.data();
+            const updatePayload: {kpiScore: number, status?: ReviewStatus, completedAt?: Date} = {
+                kpiScore: kpiScore,
+            };
+
+            // Only mark as "Completed" if the manager has already done their part (status is "Em Aprovação")
+            if (reviewData.status === 'Em Aprovação') {
+                updatePayload.status = 'Concluída';
+                updatePayload.completedAt = new Date();
+            }
+
+            batch.update(reviewRef, updatePayload);
+        });
+        
+        // Save the assessment to history
+        const assessmentHistoryRef = doc(collection(db, 'kpi_assessments'));
+        batch.set(assessmentHistoryRef, {
+            departmentId: model.departmentId,
+            departmentName: model.departmentName,
+            period: period,
+            kpiScore: kpiScore,
+            results: results,
+            indicators: model.indicators, // Store a snapshot of the indicators
+            assessedAt: new Date(),
+        });
+
+
+        await batch.commit();
+
+        return { success: true, message: `Nota de KPI (${kpiScore.toFixed(2)}) apurada e salva para ${reviewsSnapshot.size} avaliaçõe(s) do setor ${model.departmentName}!` };
+
+    } catch (error) {
+        console.error("Error processing KPI results: ", error);
+        return { success: false, message: 'Erro ao processar e salvar resultados de KPI.' };
+    }
+}
+
+// --- Bonus Report Actions ---
+export interface BonusReportData {
+    employeeName: string;
+    departmentName: string;
+    role: string;
+    averageScore: number;
+    kpiScore: number;
+    performanceBonusPercentage: number;
+    kpiBonusValue: number;
+}
+
+export async function getBonusReport(filters: { period: string; departmentId?: string }): Promise<BonusReportData[]> {
+    const { period, departmentId } = filters;
+    if (!period) return [];
+
+    try {
+        const reviewsRef = collection(db, 'reviews');
+        const conditions = [
+            where('period', '==', period),
+            where('status', '==', 'Concluída')
+        ];
+
+        if (departmentId) {
+            const departmentDoc = await getDoc(doc(db, 'departments', departmentId));
+            if (departmentDoc.exists()) {
+                const departmentName = departmentDoc.data().name;
+                conditions.push(where('department', '==', departmentName));
+            } else {
+                 return []; // No department found, no results
+            }
+        }
+        
+        const [reviewsSnapshot, performanceParams, kpiParams, allUsers] = await Promise.all([
+            getDocs(query(reviewsRef, ...conditions)),
+            getBonusParameters(),
+            getKpiBonusParameters(),
+            getUsers()
+        ]);
+
+        if (reviewsSnapshot.empty) return [];
+
+        const usersMap = new Map(allUsers.map(u => [u.id, u]));
+
+        return reviewsSnapshot.docs.map(doc => {
+            const review = doc.data();
+            const user = usersMap.get(review.employeeId);
+            
+            const avgScore = review.averageScore ?? 0;
+            const kpiScore = review.kpiScore ?? 0;
+
+            const perfRule = performanceParams.rules.find(r => avgScore >= r.minScore && avgScore <= r.maxScore);
+            const kpiRule = kpiParams.rules.find(r => kpiScore >= r.minScore && kpiScore <= r.maxScore);
+            
+            let baseKpiBonus = 0;
+            if (kpiRule && user) {
+                baseKpiBonus = user.role === 'Gerente' ? kpiRule.bonusValueLeader : kpiRule.bonusValueLed;
+            }
+            
+            const perfBonusPercentage = perfRule?.bonusPercentage ?? 0;
+            const finalKpiBonus = baseKpiBonus * (perfBonusPercentage / 100);
+
+            return {
+                employeeName: review.employee,
+                departmentName: review.department,
+                role: review.role,
+                averageScore: avgScore,
+                kpiScore: kpiScore,
+                performanceBonusPercentage: perfBonusPercentage,
+                kpiBonusValue: finalKpiBonus,
+            };
+        }).sort((a,b) => a.employeeName.localeCompare(b.employeeName));
+
+    } catch (error) {
+        console.error("Error getting bonus report data:", error);
+        return [];
+    }
+}
+
+// --- Individual Performance History ---
+export interface PerformanceHistoryData {
+    period: string;
+    averageScore: number;
+}
+
+export async function getIndividualPerformanceHistory(employeeId: string): Promise<PerformanceHistoryData[]> {
+    if (!employeeId) return [];
+
+    try {
+        const reviewsQuery = query(
+            collection(db, 'reviews'),
+            where('employeeId', '==', employeeId),
+            where('status', '==', 'Concluída'),
+            orderBy('period', 'desc')
+        );
+
+        const snapshot = await getDocs(reviewsQuery);
+
+        if (snapshot.empty) return [];
+
+        return snapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+                period: data.period,
+                averageScore: data.averageScore,
+            };
+        });
+    } catch (error) {
+        console.error("Error fetching individual performance history:", error);
+        return [];
+    }
+}
     
 
-    
