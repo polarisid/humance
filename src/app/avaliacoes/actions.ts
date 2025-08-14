@@ -23,9 +23,10 @@ import {
 import type { LoggedUser } from '../actions';
 import { reviewTemplateSchema, reviewSubmissionSchema, reviewAdjustmentSchema, bonusParametersSchema, kpiModelSchema, kpiBonusParametersSchema, type ReviewTemplateFormData, type BonusParametersData, type KpiModelFormData, type KpiBonusParametersData } from './schema';
 import type { User } from '../usuarios/actions';
-import { format } from 'date-fns';
+import { format, subMonths, startOfMonth, endOfMonth, parse } from 'date-fns';
 import { getManagers, getDepartments } from '../setores/actions';
 import { getUsers } from '../usuarios/actions';
+import type { DiaryEntry } from '../diario/actions';
 
 export type ReviewStatus = 'Pendente' | 'Em Aprovação' | 'Ajuste Solicitado' | 'Concluída' | 'Atrasada';
 
@@ -43,12 +44,6 @@ export interface Review {
   kpiScore?: number;
 }
 
-export interface WeeklyObservation {
-  id: string;
-  text: string;
-  createdAt: string;
-}
-
 export interface PerformanceReview {
   id: string;
   employeeId: string;
@@ -64,13 +59,12 @@ export interface PerformanceReview {
   scores?: Record<string, number>;
   averageScore?: number;
   kpiScore?: number;
-  managerObservations?: string;
   feedbackForEmployee?: string;
   adminFeedbackForManager?: string;
   completedAt?: string;
-  weeklyObservations?: WeeklyObservation[];
   previousAverageScore?: number;
   previousScores?: Record<string, number>;
+  currentPeriodDiaryEntries?: DiaryEntry[];
 }
 
 
@@ -83,27 +77,26 @@ export async function getReviews(user: LoggedUser, filters?: { departmentId?: st
       conditions.push(where('employeeId', '==', user.id));
       break;
     case 'Gerente':
-      conditions.push(where('managerId', '==', user.id));
-      break;
+       if (filters?.period) {
+          conditions.push(where('period', '==', filters.period));
+       }
+       conditions.push(where('managerId', '==', user.id));
+       break;
     case 'Administrador':
-      // No initial role-based condition for Admin
+      if (filters?.departmentId) {
+        const departmentDoc = await getDoc(doc(db, 'departments', filters.departmentId));
+        if (departmentDoc.exists()) {
+            const departmentName = departmentDoc.data().name;
+            conditions.push(where('department', '==', departmentName));
+        }
+      }
+      if (filters?.period) {
+        conditions.push(where('period', '==', filters.period));
+      }
       break;
     default:
       return [];
   }
-  
-  if (user.role === 'Administrador' && filters?.departmentId) {
-    const departmentDoc = await getDoc(doc(db, 'departments', filters.departmentId));
-    if (departmentDoc.exists()) {
-        const departmentName = departmentDoc.data().name;
-        conditions.push(where('department', '==', departmentName));
-    }
-  }
-
-  if (filters?.period) {
-    conditions.push(where('period', '==', filters.period));
-  }
-
 
   const q = conditions.length > 0 ? query(reviewsRef, ...conditions) : query(reviewsRef);
   const snapshot = await getDocs(q);
@@ -420,6 +413,34 @@ export async function createReviews(data: {
 }
 
 // --- Review Detail Actions ---
+export async function getDiaryEntriesForReview(employeeId: string, period: string): Promise<DiaryEntry[]> {
+    if (!employeeId || !period) {
+        return [];
+    }
+    try {
+        const currentPeriodDate = parse(period, 'yyyy-MM', new Date());
+        const startDate = startOfMonth(currentPeriodDate);
+        const endDate = endOfMonth(currentPeriodDate);
+        
+        const diaryQuery = query(
+            collection(db, 'weekly_observations_diary'),
+            where('employeeId', '==', employeeId),
+            where('createdAt', '>=', startDate),
+            where('createdAt', '<=', endDate),
+            orderBy('createdAt', 'desc')
+        );
+        const diarySnapshot = await getDocs(diaryQuery);
+        const entries = diarySnapshot.docs.map(d => ({
+            id: d.id,
+            ...d.data(),
+            createdAt: (d.data().createdAt as Timestamp).toDate().toISOString()
+        })) as DiaryEntry[];
+        return entries;
+    } catch (error) {
+        console.error("Could not fetch diary entries, returning empty array:", error);
+        return [];
+    }
+}
 
 export async function getReviewDetails(reviewId: string): Promise<PerformanceReview | null> {
     if (!reviewId) return null;
@@ -438,13 +459,10 @@ export async function getReviewDetails(reviewId: string): Promise<PerformanceRev
             console.error("Review document is missing templateId or employeeId", reviewId);
             return null;
         }
-
-        const observationsQuery = query(collection(db, `reviews/${reviewId}/weekly_observations`), orderBy('createdAt', 'desc'));
-
-        const [templateSnap, employeeSnap, observationsSnap] = await Promise.all([
+        
+        const [templateSnap, employeeSnap] = await Promise.all([
             getDoc(doc(db, 'review_templates', reviewData.templateId)),
             getDoc(doc(db, 'users', reviewData.employeeId)),
-            getDocs(observationsQuery),
         ]);
         
         if (!templateSnap.exists() || !employeeSnap.exists()) {
@@ -455,34 +473,25 @@ export async function getReviewDetails(reviewId: string): Promise<PerformanceRev
         const templateData = templateSnap.data();
         const employeeData = employeeSnap.data();
 
-        const weeklyObservations: WeeklyObservation[] = observationsSnap.docs.map(obsDoc => ({
-            id: obsDoc.id,
-            text: obsDoc.data().text,
-            createdAt: (obsDoc.data().createdAt as Timestamp).toDate().toISOString(),
-        }));
-        
         // Find the previous completed review for this employee
         let previousReviewData: { averageScore?: number; scores?: Record<string, number> } = {};
+        const previousPeriod = format(subMonths(parse(reviewData.period, 'yyyy-MM', new Date()), 1), 'yyyy-MM');
+        
         const previousReviewQuery = query(
             collection(db, 'reviews'),
             where('employeeId', '==', reviewData.employeeId),
-            where('status', '==', 'Concluída')
+            where('period', '==', previousPeriod),
+            where('status', '==', 'Concluída'),
+            limit(1)
         );
         const previousReviewSnapshot = await getDocs(previousReviewQuery);
         
         if (!previousReviewSnapshot.empty) {
-            const previousReviews = previousReviewSnapshot.docs
-                .map(doc => doc.data())
-                .filter(data => data.period < reviewData.period)
-                .sort((a, b) => b.period.localeCompare(a.period));
-
-            if (previousReviews.length > 0) {
-                const prevReview = previousReviews[0];
-                previousReviewData = {
-                    averageScore: prevReview.averageScore,
-                    scores: prevReview.scores,
-                };
-            }
+            const prevReview = previousReviewSnapshot.docs[0].data();
+            previousReviewData = {
+                averageScore: prevReview.averageScore,
+                scores: prevReview.scores,
+            };
         }
 
         const completedAtTimestamp = reviewData.completedAt as Timestamp;
@@ -502,11 +511,9 @@ export async function getReviewDetails(reviewId: string): Promise<PerformanceRev
             scores: reviewData.scores,
             averageScore: reviewData.averageScore,
             kpiScore: reviewData.kpiScore,
-            managerObservations: reviewData.managerObservations,
             feedbackForEmployee: reviewData.feedbackForEmployee,
             adminFeedbackForManager: reviewData.adminFeedbackForManager,
             completedAt: completedAtTimestamp ? completedAtTimestamp.toDate().toISOString() : undefined,
-            weeklyObservations: weeklyObservations,
             previousAverageScore: previousReviewData.averageScore,
             previousScores: previousReviewData.scores,
         };
@@ -520,7 +527,6 @@ export async function getReviewDetails(reviewId: string): Promise<PerformanceRev
 export async function submitReview(data: { 
     reviewId: string, 
     scores: Record<string, number>, 
-    managerObservations: string,
     feedbackForEmployee: string
 }) {
     const validation = reviewSubmissionSchema.safeParse(data);
@@ -539,7 +545,6 @@ export async function submitReview(data: {
         await updateDoc(reviewRef, {
             scores: validation.data.scores,
             averageScore: averageScore,
-            managerObservations: validation.data.managerObservations,
             feedbackForEmployee: validation.data.feedbackForEmployee,
             status: 'Em Aprovação',
             adminFeedbackForManager: '', // Clear previous feedback on resubmission
@@ -612,19 +617,19 @@ export async function deleteReview(reviewId: string) {
     }
 }
 
-export async function addObservationForUser(data: { managerId: string; employeeId: string; text: string }) {
-  const { managerId, employeeId, text } = data;
+export async function addObservationForUser(data: { managerId: string; employeeId: string; text: string; period?: string; }) {
+  const { managerId, employeeId, text, period } = data;
   if (!managerId || !employeeId || !text.trim()) {
     return { success: false, message: 'Dados inválidos.' };
   }
 
   try {
-    const period = format(new Date(), 'yyyy-MM');
+    const observationPeriod = period || format(new Date(), 'yyyy-MM');
     const reviewsRef = collection(db, 'reviews');
 
     const q = query(reviewsRef, 
       where('employeeId', '==', employeeId), 
-      where('period', '==', period)
+      where('period', '==', observationPeriod)
     );
     const querySnapshot = await getDocs(q);
     
@@ -669,7 +674,7 @@ export async function addObservationForUser(data: { managerId: string; employeeI
           managerId: managerId,
           templateId: template.id,
           templateName: template.name,
-          period: period,
+          period: observationPeriod,
       };
       const newReviewRef = await addDoc(reviewsRef, newReviewData);
       reviewId = newReviewRef.id;
@@ -700,10 +705,24 @@ export async function addWeeklyObservation(data: { reviewId: string; text: strin
     return { success: false, message: 'Dados inválidos.' };
   }
   try {
-    const obsRef = collection(db, 'reviews', reviewId, 'weekly_observations');
+    const reviewSnap = await getDoc(doc(db, 'reviews', reviewId));
+    if(!reviewSnap.exists()) {
+        return { success: false, message: 'Avaliação não encontrada para adicionar observação.' };
+    }
+    const reviewData = reviewSnap.data();
+
+    const managerSnap = await getDoc(doc(db, 'users', reviewData.managerId));
+    const managerName = managerSnap.exists() ? managerSnap.data().name : 'Desconhecido';
+
+    const obsRef = collection(db, 'weekly_observations_diary');
     await addDoc(obsRef, {
       text,
       createdAt: new Date(),
+      reviewId,
+      employeeId: reviewData.employeeId,
+      employeeName: reviewData.employee,
+      authorId: reviewData.managerId,
+      authorName: managerName,
     });
     return { success: true, message: 'Observação adicionada com sucesso.' };
   } catch (error) {
@@ -720,7 +739,7 @@ export async function deleteWeeklyObservation(data: { reviewId: string; observat
   try {
     const obsRef = doc(db, 'reviews', reviewId, 'weekly_observations', observationId);
     await deleteDoc(obsRef);
-    return { success: true, message: 'Observação excluída com sucesso.' };
+    return { success: true, message: 'Observação excluída com sucesso!' };
   } catch (error) {
     console.error("Error deleting weekly observation:", error);
     return { success: false, message: 'Erro ao excluir observação.' };
@@ -955,7 +974,7 @@ export async function deleteKpiAssessment(assessmentId: string) {
         // 2. Update them to remove the kpiScore
         reviewsSnapshot.forEach(reviewDoc => {
             const reviewRef = doc(db, 'reviews', reviewDoc.id);
-            batch.update(reviewRef, { kpiScore: null }); // or FieldValue.delete()
+            batch.update(reviewRef, { kpiScore: null });
         });
     }
     
@@ -1123,7 +1142,7 @@ export async function getBonusReport(filters: { period: string; departmentId?: s
             
             let baseKpiBonus = 0;
             if (kpiRule && user) {
-                baseKpiBonus = user.role === 'Gerente' ? kpiRule.bonusValueLeader : kpiRule.bonusValueLed;
+                baseKpiBonus = user.role === 'Colaborador' ? kpiRule.bonusValueLed : kpiRule.bonusValueLeader;
             }
             
             const perfBonusPercentage = perfRule?.bonusPercentage ?? 0;
@@ -1179,5 +1198,9 @@ export async function getIndividualPerformanceHistory(employeeId: string): Promi
         return [];
     }
 }
+    
+
+    
+
     
 

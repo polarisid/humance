@@ -29,7 +29,7 @@ export function WeeklyObservations() {
       const loggedUser: LoggedUser = JSON.parse(userString);
       setUser(loggedUser);
 
-      if (loggedUser.role === 'Administrador') {
+      if (loggedUser.role === 'Administrador' || loggedUser.role === 'Gerente') {
         fetchUsers(loggedUser);
       } else {
         setLoading(false);
@@ -82,8 +82,8 @@ export function WeeklyObservations() {
     }
   };
 
-  if (user?.role !== 'Administrador') {
-    return null; // Don't render for anyone but admins
+  if (user?.role !== 'Administrador' && user?.role !== 'Gerente') {
+    return null;
   }
 
   if (loading) {

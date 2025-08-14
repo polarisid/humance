@@ -375,5 +375,3 @@ export async function getPerformanceReviewSummary(user: LoggedUser): Promise<Per
         return [];
     }
 }
-
-    

@@ -4,22 +4,47 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useToast } from '@/hooks/use-toast';
-import { getReviewDetails, submitReview, type PerformanceReview, addWeeklyObservation, deleteWeeklyObservation, approveReview, requestReviewAdjustment } from '../actions';
+import { getReviewDetails, submitReview, type PerformanceReview, approveReview, requestReviewAdjustment, getDiaryEntriesForReview } from '../actions';
 import type { LoggedUser } from '@/app/actions';
-import { format } from 'date-fns';
+import { format, parseISO } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 
 import { PageHeader } from '@/components/page-header';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Loader2, User, Building, Calendar, Plus, Trash2, AlertCircle, Star, ArrowUp, ArrowDown, Minus } from 'lucide-react';
+import { Loader2, User, Building, Calendar, Star, ArrowUp, ArrowDown, Minus, AlertCircle } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Separator } from '@/components/ui/separator';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { ReviewRadarChart } from '@/components/review-radar-chart';
+import type { DiaryEntry } from '@/app/diario/actions';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { cn } from '@/lib/utils';
+
+
+const generatePeriodOptions = () => {
+    const options = new Set<string>();
+    let date = new Date();
+
+    // Add past 12 months
+    for (let i = 0; i < 12; i++) {
+        options.add(format(date, 'yyyy-MM'));
+        date.setMonth(date.getMonth() - 1);
+    }
+    
+    return Array.from(options)
+        .sort()
+        .reverse()
+        .map(periodValue => {
+            const periodDate = new Date(`${periodValue}-02`); // Use day 02 to avoid timezone issues
+            const periodLabel = format(periodDate, "MMMM' de 'yyyy", { locale: ptBR });
+            return { value: periodValue, label: periodLabel.charAt(0).toUpperCase() + periodLabel.slice(1) };
+        });
+}
+
 
 export default function ReviewDetailPage() {
     const params = useParams();
@@ -30,19 +55,22 @@ export default function ReviewDetailPage() {
     const [user, setUser] = useState<LoggedUser | null>(null);
     const [review, setReview] = useState<PerformanceReview | null>(null);
     const [scores, setScores] = useState<Record<string, number>>({});
-    const [managerObservations, setManagerObservations] = useState('');
     const [feedbackForEmployee, setFeedbackForEmployee] = useState('');
-    const [newObservation, setNewObservation] = useState('');
     
     const [loading, setLoading] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [isAddingObservation, setIsAddingObservation] = useState(false);
 
     // New states for approval flow
     const [isApproving, setIsApproving] = useState(false);
     const [isRequestingAdjustment, setIsRequestingAdjustment] = useState(false);
     const [adjustmentFeedback, setAdjustmentFeedback] = useState('');
     const [adjustmentDialogOpen, setAdjustmentDialogOpen] = useState(false);
+    
+    // Diary entries state
+    const [diaryEntries, setDiaryEntries] = useState<DiaryEntry[]>([]);
+    const [diaryPeriod, setDiaryPeriod] = useState(format(new Date(), 'yyyy-MM'));
+    const [loadingDiary, setLoadingDiary] = useState(false);
+    const periodOptions = useMemo(generatePeriodOptions, []);
     
     // Roles
     const isManager = user?.role === 'Gerente';
@@ -69,13 +97,31 @@ export default function ReviewDetailPage() {
         return null;
     }, [scores, review?.averageScore]);
 
+    const fetchDiaryEntriesForPeriod = useCallback(async (employeeId: string, period: string) => {
+        setLoadingDiary(true);
+        try {
+            const newEntries = await getDiaryEntriesForReview(employeeId, period);
+            setDiaryEntries(newEntries);
+        } catch (error) {
+            console.error(error);
+            toast({ title: "Erro", description: "Não foi possível carregar as observações do diário.", variant: "destructive" });
+        } finally {
+            setLoadingDiary(false);
+        }
+    }, [toast]);
+    
+    const handleDiaryPeriodChange = (newPeriod: string) => {
+        if (!review) return;
+        setDiaryPeriod(newPeriod);
+        fetchDiaryEntriesForPeriod(review.employeeId, newPeriod);
+    };
+
     const fetchData = useCallback(async () => {
         setLoading(true);
         try {
             const reviewData = await getReviewDetails(reviewId);
             if (reviewData) {
                 setReview(reviewData);
-                // Initialize state from fetched data
                 const initialScores: Record<string, number> = {};
                 if (reviewData.scores && Object.keys(reviewData.scores).length > 0) {
                      Object.entries(reviewData.scores).forEach(([key, value]) => {
@@ -83,12 +129,23 @@ export default function ReviewDetailPage() {
                     });
                 } else {
                     reviewData.templateItems.forEach((_, index) => {
-                        initialScores[index] = 5; // Default to 5
+                        initialScores[String(index)] = 5;
                     });
                 }
                 setScores(initialScores);
-                setManagerObservations(reviewData.managerObservations || '');
                 setFeedbackForEmployee(reviewData.feedbackForEmployee || '');
+                
+                // Set initial diary entries and period from review data
+                if (reviewData.period) {
+                    setDiaryPeriod(reviewData.period);
+                    // Initial fetch for diary entries for the review's period
+                    await fetchDiaryEntriesForPeriod(reviewData.employeeId, reviewData.period);
+                } else {
+                    // Fallback if review has no period
+                    setDiaryEntries([]);
+                }
+                
+
             } else {
                 toast({ title: "Erro", description: "Avaliação não encontrada.", variant: "destructive" });
                 router.push('/avaliacoes');
@@ -99,7 +156,7 @@ export default function ReviewDetailPage() {
         } finally {
             setLoading(false);
         }
-    }, [reviewId, router, toast]);
+    }, [reviewId, router, toast, fetchDiaryEntriesForPeriod]);
 
     useEffect(() => {
         const userString = localStorage.getItem('user');
@@ -112,41 +169,6 @@ export default function ReviewDetailPage() {
         fetchData();
     }, [fetchData, router]);
 
-    const handleAddObservation = async () => {
-        if (!newObservation.trim()) return;
-        setIsAddingObservation(true);
-        try {
-            const result = await addWeeklyObservation({ reviewId, text: newObservation });
-            if (result.success) {
-                toast({ title: "Sucesso", description: result.message });
-                setNewObservation('');
-                fetchData(); // Refetch to get the new list
-            } else {
-                toast({ title: "Erro", description: result.message, variant: "destructive" });
-            }
-        } catch (error) {
-            console.error(error);
-            toast({ title: "Erro", description: "Não foi possível adicionar a observação.", variant: "destructive" });
-        } finally {
-            setIsAddingObservation(false);
-        }
-    };
-
-    const handleDeleteObservation = async (observationId: string) => {
-        try {
-            const result = await deleteWeeklyObservation({ reviewId, observationId });
-            if (result.success) {
-                toast({ title: "Sucesso", description: result.message });
-                fetchData(); // Refetch to get the new list
-            } else {
-                toast({ title: "Erro", description: result.message, variant: "destructive" });
-            }
-        } catch (error) {
-            console.error(error);
-            toast({ title: "Erro", description: "Não foi possível excluir a observação.", variant: "destructive" });
-        }
-    };
-
     const handleSubmitReview = async () => {
         if (!review || !feedbackForEmployee) {
             toast({ title: "Atenção", description: "O campo de feedback para o colaborador é obrigatório.", variant: "destructive" });
@@ -158,7 +180,6 @@ export default function ReviewDetailPage() {
             const result = await submitReview({
                 reviewId,
                 scores,
-                managerObservations,
                 feedbackForEmployee,
             });
 
@@ -272,7 +293,12 @@ export default function ReviewDetailPage() {
                             <CardDescription>Avalie cada item de 0 a 10, sendo 0 "Muito a melhorar" e 10 "Excelente".</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6">
-                            {review.templateItems.map((item, index) => (
+                            {review.templateItems.map((item, index) => {
+                                const previousScore = review.previousScores?.[String(index)];
+                                const hasPreviousScore = previousScore !== undefined && previousScore !== null;
+                                const previousScorePosition = hasPreviousScore ? `${previousScore * 10}%` : '0%';
+
+                                return (
                                 <div key={index} className="space-y-3">
                                     <div className="flex justify-between items-center">
                                         <div>
@@ -280,10 +306,9 @@ export default function ReviewDetailPage() {
                                             {item.description && <p className="text-sm text-muted-foreground mt-1">{item.description}</p>}
                                         </div>
                                         <div className="flex items-center gap-2 text-right">
-                                            {isCollaborator && reviewIsCompleted && review.previousScores && review.previousScores[String(index)] !== undefined && (
+                                            {isCollaborator && reviewIsCompleted && previousScore !== undefined && (
                                                 (() => {
-                                                    const currentScore = scores[index];
-                                                    const previousScore = review.previousScores[String(index)];
+                                                    const currentScore = scores[String(index)];
                                                     const scoreDiff = currentScore - previousScore;
                                                     if (scoreDiff > 0) {
                                                         return <span className="text-sm font-semibold text-green-600">(+{scoreDiff})</span>
@@ -294,20 +319,33 @@ export default function ReviewDetailPage() {
                                                     return <span className="text-sm font-semibold text-muted-foreground">(&#8211;)</span>;
                                                 })()
                                             )}
-                                            <span className="font-bold text-lg text-primary w-6 text-center">{scores[index]}</span>
+                                            <span className="font-bold text-lg text-primary w-6 text-center">{scores[String(index)]}</span>
                                         </div>
                                     </div>
-                                    <Slider
-                                        id={`item-${index}`}
-                                        min={0}
-                                        max={10}
-                                        step={1}
-                                        value={[scores[index]]}
-                                        onValueChange={(value) => setScores(prev => ({...prev, [index]: value[0]}))}
-                                        disabled={!isFormEditable}
-                                    />
+                                    <div className="relative pt-2">
+                                        <Slider
+                                            id={`item-${index}`}
+                                            min={0}
+                                            max={10}
+                                            step={1}
+                                            value={[scores[String(index)]]}
+                                            onValueChange={(value) => setScores(prev => ({...prev, [String(index)]: value[0]}))}
+                                            disabled={!isFormEditable}
+                                            className="w-full"
+                                        />
+                                        {hasPreviousScore && (
+                                            <div
+                                                className={cn(
+                                                    "absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-muted-foreground/50 pointer-events-none",
+                                                    "transform -translate-x-1/2" // center the marker
+                                                )}
+                                                style={{ left: previousScorePosition }}
+                                                title={`Nota Anterior: ${previousScore}`}
+                                            />
+                                        )}
+                                    </div>
                                 </div>
-                            ))}
+                            )})}
                         </CardContent>
                     </Card>
 
@@ -422,67 +460,56 @@ export default function ReviewDetailPage() {
                     )}
 
                     {!isCollaborator && (
-                        <>
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle>Pontos Observados</CardTitle>
-                                    <CardDescription>Adicione pontos de acompanhamento. Eles não são visíveis para o colaborador.</CardDescription>
-                                </CardHeader>
-                                <CardContent>
-                                    {isManager && !reviewIsCompleted && (
-                                        <div className="flex items-start gap-2 mb-4">
-                                            <Textarea 
-                                                placeholder="Descreva um fato ou ponto de atenção..."
-                                                rows={2}
-                                                value={newObservation}
-                                                onChange={(e) => setNewObservation(e.target.value)}
-                                                disabled={isAddingObservation}
-                                            />
-                                            <Button onClick={handleAddObservation} disabled={isAddingObservation || !newObservation.trim()} size="icon" className="shrink-0">
-                                                {isAddingObservation ? <Loader2 className="h-4 w-4 animate-spin"/> : <Plus className="h-4 w-4"/>}
-                                                <span className="sr-only">Adicionar</span>
-                                            </Button>
+                        <Card>
+                            <CardHeader>
+                                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                                    <div>
+                                        <CardTitle>Histórico de Observações</CardTitle>
+                                        <CardDescription>Filtre e visualize os registros do diário.</CardDescription>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <div className="w-full sm:w-48">
+                                            <Select value={diaryPeriod} onValueChange={handleDiaryPeriodChange}>
+                                                <SelectTrigger>
+                                                    <SelectValue placeholder="Selecione um período..." />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    {periodOptions.map(opt => (
+                                                        <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
                                         </div>
-                                    )}
-                                    <ScrollArea className="h-48">
+                                    </div>
+                                </div>
+                            </CardHeader>
+                            <CardContent>
+                                <ScrollArea className="h-48">
+                                    {loadingDiary ? (
+                                         <div className="flex justify-center items-center h-full">
+                                            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                                        </div>
+                                    ) : (
                                         <div className="space-y-4 pr-4">
-                                            {review.weeklyObservations && review.weeklyObservations.length > 0 ? (
-                                                review.weeklyObservations.map(obs => (
-                                                    <div key={obs.id} className="flex items-start justify-between gap-4 text-sm">
-                                                        <div className="flex-1">
-                                                            <p className="text-muted-foreground whitespace-pre-wrap">{obs.text}</p>
-                                                            <p className="text-xs text-muted-foreground/70 mt-1">{format(new Date(obs.createdAt), 'dd/MM/yyyy')}</p>
+                                            {diaryEntries.length > 0 ? (
+                                                diaryEntries.map(entry => (
+                                                    <div key={entry.id}>
+                                                        <p className="text-sm text-foreground whitespace-pre-wrap">{entry.text}</p>
+                                                        <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
+                                                          <span>{entry.authorName}</span>
+                                                          <span>-</span>
+                                                          <span>{format(parseISO(entry.createdAt), 'dd/MM/yyyy HH:mm')}</span>
                                                         </div>
-                                                        {isManager && !reviewIsCompleted && (
-                                                            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => handleDeleteObservation(obs.id)}>
-                                                                <Trash2 className="h-4 w-4 text-destructive"/>
-                                                            </Button>
-                                                        )}
                                                     </div>
                                                 ))
                                             ) : (
-                                                <p className="text-sm text-muted-foreground text-center py-4">Nenhum ponto observado ainda.</p>
+                                                <p className="text-sm text-muted-foreground text-center py-4">Nenhum registro encontrado no diário para este período.</p>
                                             )}
                                         </div>
-                                    </ScrollArea>
-                                </CardContent>
-                            </Card>
-                            <Card>
-                                <CardHeader>
-                                    <CardTitle>Observações do Gestor</CardTitle>
-                                    <CardDescription>Suas anotações privadas. Não serão compartilhadas com o colaborador.</CardDescription>
-                                </CardHeader>
-                                <CardContent>
-                                    <Textarea
-                                        placeholder="Adicione anotações, exemplos específicos e pontos de atenção para a conversa de feedback..."
-                                        rows={8}
-                                        value={managerObservations}
-                                        onChange={(e) => setManagerObservations(e.target.value)}
-                                        disabled={!isFormEditable}
-                                    />
-                                </CardContent>
-                            </Card>
-                        </>
+                                    )}
+                                </ScrollArea>
+                            </CardContent>
+                        </Card>
                     )}
                     
                     <Alert>

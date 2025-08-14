@@ -21,15 +21,22 @@ import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 const generatePeriodOptions = () => {
-    const options = [];
+    const options = new Set<string>();
     let date = new Date();
-    for (let i=0; i < 12; i++) {
-        const periodValue = format(date, 'yyyy-MM');
-        const periodLabel = format(date, "MMMM' de 'yyyy", { locale: ptBR });
-        options.push({ value: periodValue, label: periodLabel.charAt(0).toUpperCase() + periodLabel.slice(1) });
+
+    // Add past 12 months
+    for (let i = 0; i < 12; i++) {
+        options.add(format(date, 'yyyy-MM'));
         date.setMonth(date.getMonth() - 1);
     }
-    return options;
+
+    return Array.from(options)
+        .sort((a, b) => b.localeCompare(a))
+        .map(periodValue => {
+            const periodDate = new Date(`${periodValue}-02`); // Use day 02 to avoid timezone issues
+            const periodLabel = format(periodDate, "MMMM' de 'yyyy", { locale: ptBR });
+            return { value: periodValue, label: periodLabel.charAt(0).toUpperCase() + periodLabel.slice(1) };
+        });
 }
 
 export default function DiaryPage() {
@@ -58,12 +65,12 @@ export default function DiaryPage() {
         setObservableUsers(users);
     }, []);
     
-    const fetchEntries = useCallback(async (currentUser: LoggedUser) => {
+    const fetchEntries = useCallback(async (currentUser: LoggedUser, currentFilters: { period: string, employeeId?: string }) => {
         setLoading(true);
-        const data = await getDiaryEntries(currentUser, filters);
+        const data = await getDiaryEntries(currentUser, currentFilters);
         setEntries(data);
         setLoading(false);
-    }, [filters]);
+    }, []);
 
     useEffect(() => {
         const userString = localStorage.getItem('user');
@@ -72,14 +79,19 @@ export default function DiaryPage() {
             if (loggedUser.role === 'Gerente' || loggedUser.role === 'Administrador') {
                 setUser(loggedUser);
                 fetchUsers(loggedUser);
-                fetchEntries(loggedUser);
             } else {
                 router.push('/dashboard');
             }
         } else {
             router.push('/');
         }
-    }, [router, fetchUsers, fetchEntries]);
+    }, [router, fetchUsers]);
+
+    useEffect(() => {
+        if (user) {
+            fetchEntries(user, filters);
+        }
+    }, [user, filters, fetchEntries]);
     
 
     const handleSubmit = async () => {
@@ -93,13 +105,14 @@ export default function DiaryPage() {
             managerId: user.id,
             employeeId: selectedUserId,
             text: observationText,
+            period: filters.period, // Pass the selected period
         });
 
         if (result.success) {
             toast({ title: "Sucesso!", description: "Observação adicionada ao diário." });
             setObservationText('');
             setSelectedUserId('');
-            fetchEntries(user); // Refresh the list
+            fetchEntries(user, filters); // Refresh the list
         } else {
             toast({ title: "Erro", description: result.message, variant: "destructive" });
         }
@@ -225,3 +238,5 @@ export default function DiaryPage() {
         </div>
     );
 }
+
+    

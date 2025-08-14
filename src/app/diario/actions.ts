@@ -1,3 +1,4 @@
+
 'use server';
 
 import { db } from '@/lib/firebase';
@@ -8,9 +9,10 @@ import {
   getDocs,
   type Timestamp,
   orderBy,
+  type QueryConstraint,
 } from 'firebase/firestore';
 import type { LoggedUser } from '../actions';
-import { format, parse } from 'date-fns';
+import { format, parse, startOfMonth, endOfMonth } from 'date-fns';
 
 export interface DiaryEntry {
   id: string;
@@ -29,19 +31,33 @@ export async function getDiaryEntries(user: LoggedUser, filters: { period: strin
     const { period, employeeId } = filters;
     
     // Convert 'yyyy-MM' period to a date range
-    const startDate = parse(period, 'yyyy-MM', new Date());
-    const endDate = new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0, 23, 59, 59);
+    const startDate = startOfMonth(parse(period, 'yyyy-MM', new Date()));
+    const endDate = endOfMonth(startDate);
 
-    const observationsQuery = query(
-        collection(db, 'weekly_observations_diary'),
+    const queryConstraints: QueryConstraint[] = [
         where('createdAt', '>=', startDate),
         where('createdAt', '<=', endDate),
         orderBy('createdAt', 'desc')
+    ];
+    
+    // Always filter by employee if provided
+    if (employeeId) {
+        queryConstraints.push(where('employeeId', '==', employeeId));
+    }
+    
+    // If user is a Manager, further constrain the query to their own entries
+    if (user.role === 'Gerente') {
+        queryConstraints.push(where('authorId', '==', user.id));
+    }
+
+    const observationsQuery = query(
+        collection(db, 'weekly_observations_diary'),
+        ...queryConstraints
     );
 
     const snapshot = await getDocs(observationsQuery);
 
-    let entries = snapshot.docs.map(doc => {
+    return snapshot.docs.map(doc => {
         const data = doc.data();
         return {
             id: doc.id,
@@ -54,15 +70,4 @@ export async function getDiaryEntries(user: LoggedUser, filters: { period: strin
             reviewId: data.reviewId,
         } as DiaryEntry
     });
-    
-    if (user.role === 'Gerente') {
-        // Filter entries where the author is the current manager
-        entries = entries.filter(entry => entry.authorId === user.id);
-    }
-    
-    if (employeeId) {
-        entries = entries.filter(entry => entry.employeeId === employeeId);
-    }
-
-    return entries;
 }

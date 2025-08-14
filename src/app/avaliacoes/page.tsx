@@ -83,16 +83,17 @@ const statusVariant: { [key: string]: "default" | "secondary" | "destructive" | 
 const generatePeriodOptions = () => {
     const options = [];
     let date = new Date();
-    for (let i=0; i < 12; i++) {
+    // Generate past 12 months
+    for (let i = 0; i < 12; i++) {
         const periodValue = format(date, 'yyyy-MM');
         const periodLabel = format(date, "MMMM' de 'yyyy", { locale: ptBR });
         options.push({ value: periodValue, label: periodLabel.charAt(0).toUpperCase() + periodLabel.slice(1) });
         date.setMonth(date.getMonth() - 1);
     }
-    return options;
+    return options.sort((a,b) => b.value.localeCompare(a.value));
 }
 
-function ReviewsList({ reviews, loading, isAdmin, onDelete, onFilterChange, departments }: { reviews: Review[], loading: boolean, isAdmin: boolean, onDelete: (id: string) => void, onFilterChange: (filters: { departmentId?: string; period?: string }) => void, departments: Department[] }) {
+function ReviewsList({ reviews, loading, isAdmin, isManager, onDelete, onFilterChange, departments }: { reviews: Review[], loading: boolean, isAdmin: boolean, isManager: boolean, onDelete: (id: string) => void, onFilterChange: (filters: { departmentId?: string; period?: string }) => void, departments: Department[] }) {
   const router = useRouter();
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [periodFilter, setPeriodFilter] = useState(format(new Date(), 'yyyy-MM'));
@@ -122,7 +123,7 @@ function ReviewsList({ reviews, loading, isAdmin, onDelete, onFilterChange, depa
             <CardTitle>Lista de Avaliações</CardTitle>
             <CardDescription>Acompanhe o andamento das avaliações.</CardDescription>
           </div>
-          {isAdmin && (
+          {(isAdmin || isManager) && (
              <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                 <div className="w-full sm:w-56">
                     <Select value={periodFilter} onValueChange={handlePeriodChange}>
@@ -136,19 +137,21 @@ function ReviewsList({ reviews, loading, isAdmin, onDelete, onFilterChange, depa
                         </SelectContent>
                     </Select>
                 </div>
-                <div className="w-full sm:w-56">
-                    <Select onValueChange={handleDepartmentChange}>
-                    <SelectTrigger>
-                        <SelectValue placeholder="Filtrar por setor..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="all">Todos os setores</SelectItem>
-                        {departments.map(dep => (
-                        <SelectItem key={dep.id} value={dep.id}>{dep.name}</SelectItem>
-                        ))}
-                    </SelectContent>
-                    </Select>
-                </div>
+                {isAdmin && (
+                  <div className="w-full sm:w-56">
+                      <Select onValueChange={handleDepartmentChange}>
+                      <SelectTrigger>
+                          <SelectValue placeholder="Filtrar por setor..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                          <SelectItem value="all">Todos os setores</SelectItem>
+                          {departments.map(dep => (
+                          <SelectItem key={dep.id} value={dep.id}>{dep.name}</SelectItem>
+                          ))}
+                      </SelectContent>
+                      </Select>
+                  </div>
+                )}
              </div>
           )}
         </div>
@@ -1451,6 +1454,7 @@ export default function ReviewsPage() {
                 reviews={reviews} 
                 loading={loading} 
                 isAdmin={isAdmin} 
+                isManager={isManager}
                 onDelete={handleDeleteReview} 
                 onFilterChange={handleFilterChange}
                 departments={departments}

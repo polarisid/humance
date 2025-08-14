@@ -16,7 +16,6 @@ export type ReviewTemplateFormData = z.infer<typeof reviewTemplateSchema>;
 export const reviewSubmissionSchema = z.object({
   reviewId: z.string(),
   scores: z.record(z.string(), z.number().min(0).max(10)),
-  managerObservations: z.string().optional(),
   feedbackForEmployee: z.string().min(20, "O feedback para o colaborador deve ter pelo menos 20 caracteres."),
 });
 

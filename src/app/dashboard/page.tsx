@@ -3,7 +3,6 @@ import { Birthdays } from "@/components/dashboard/birthdays";
 import { EmployeeOfTheMonth } from "@/components/dashboard/employee-of-the-month";
 import { PerformanceReviewSummary } from "@/components/dashboard/performance-review-summary";
 import { TrainingProgress } from "@/components/dashboard/training-progress";
-import { WeeklyObservations } from "@/components/dashboard/weekly-observations";
 import { PageHeader } from "@/components/page-header";
 
 export default function DashboardPage() {
@@ -25,9 +24,6 @@ export default function DashboardPage() {
         </div>
         <div className="lg:col-span-2 xl:col-span-4">
           <Announcements />
-        </div>
-         <div className="lg:col-span-2 xl:col-span-4">
-            <WeeklyObservations />
         </div>
         <div className="lg:col-span-2 xl:col-span-4">
           <PerformanceReviewSummary />
